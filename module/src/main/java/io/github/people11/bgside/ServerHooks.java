@@ -5,6 +5,7 @@ import static io.github.people11.bgside.H.TAG;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -14,6 +15,7 @@ import android.os.Parcel;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Display;
+import android.view.SurfaceControl;
 
 import java.lang.reflect.Constructor;
 import java.util.Map;
@@ -74,6 +76,7 @@ final class ServerHooks {
             Class<?> tfExt = cl.loadClass("com.android.server.wm.TaskFragmentExtImpl");
             Class<?> fhc = cl.loadClass("com.android.server.wm.FloatHandleController");
             Class<?> infoManager = cl.loadClass("com.android.server.wm.OplusFlexibleInfoManager");
+            Class<?> openAnimSpec = cl.loadClass("com.android.server.wm.FlexibleFloatHandleAnimationSpec");
             Class<?> starter = cl.loadClass("com.android.server.wm.ActivityStarter");
             Class<?> supervisor = cl.loadClass("com.android.server.wm.ActivityTaskSupervisor");
             Class<?> tcn = cl.loadClass("com.android.server.wm.TaskChangeNotificationController");
@@ -177,6 +180,17 @@ final class ServerHooks {
                 if (h == null || !h.moved) return false;
                 a.setBoolean(H.RET, true);
                 return true;
+            }, null);
+
+            // The open animation's first frame puts the task, scaled to 0.1 but uncropped, under a bubble-sized mask;
+            // only the spring frames after it crop the leash. A stock task has not redrawn yet, a hung one has, so its
+            // bottom shows below the bubble for a frame. Crop that first frame to nothing; the springs override it.
+            H.hook(openAnimSpec, "defaultCallAnimationStart", a -> {
+                Object spec = a.getReference(0);
+                if (!restoring.contains((int) H.get(H.get(spec, "mAnimTask"), "mTaskId"))) return false;
+                SurfaceControl.Transaction t = a.getReference(1);
+                t.setCrop(H.<SurfaceControl>get(spec, "mTaskAnimLeash"), new Rect(0, 0, 1, 1));
+                return false;
             }, null);
 
             // Launch from home / recents: move the task back to display 0 before the start (and its transition)

@@ -24,6 +24,7 @@ Zygisk 模块（基于 [AndroidVMTools](https://github.com/aerath-stuff/AndroidV
 | `DisplayContent.computeScreenConfiguration` | 虚拟屏的触屏/色彩模式配置与主屏一致，避免 Chrome 等重建 Activity |
 | `FloatHandleController.startActivityByFloatInfo` | 点气泡：原生恢复自带“虚拟屏任务移回主屏”，之后解除挂机 |
 | `OplusFlexibleInfoManager.isSkipRecordSnapshot` | 恢复动画不盖最小化时的旧快照（否则画面冻结 1~2 秒） |
+| `FlexibleFloatHandleAnimationSpec.defaultCallAnimationStart` | 恢复动画第一帧把动画层裁空，避免挂机应用的画面在气泡下方露出一帧 |
 | `ActivityStarter.execute` / `ActivityTaskSupervisor.startActivityFromRecents` | 从桌面/最近任务打开：启动前先移回主屏，原生启动动画才正常 |
 | `FloatHandleController.dispatchViewRemoved` / `TaskChangeNotificationController.notifyTaskRemoved` | 气泡被关掉、任务被移除：解除挂机 |
 
