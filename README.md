@@ -30,6 +30,14 @@ Zygisk 模块（基于 [AndroidVMTools](https://github.com/aerath-stuff/AndroidV
 
 降帧用 SurfaceFlinger 的按 uid 帧率覆盖后门（transaction 1039）。GameManager 的覆盖会被 1035 强制刷新率忽略，1039 不会。
 
+## custom 分支的个人修改（`CustomHooks`）
+
+| Hook | 作用 |
+| --- | --- |
+| `FlexibleTaskIndicatorAdapter.shouldAlwaysShowIndicatorState` / `shouldShowIndicatorState` | 迷你小窗的半透明边框不再常驻，与普通小窗一样只在按住四角时显示 |
+| `FlexibleTaskIndicatorWindowManager.scheduleIndicatorTimeout` | 迷你小窗的四角包边随边框一起隐藏，不等 5 秒超时 |
+| `FlexibleTaskController.hideZoomWindow`（flag 12）/ `switchStateAll`（`onRecentClicked`） | 回到主屏幕时小窗不再缩成右上角的迷你小窗 |
+
 ## 构建
 
 GitHub Actions 云端编译（`.github/workflows/build.yml`），每次都会把 `external/AndroidVMTools` 子模块更新到上游最新版本，

@@ -24,7 +24,10 @@ public final class Main {
                 ClassLoader loader = a.getReference(2);
                 // After all services exist, so oplus classes are not initialized early.
                 H.hook(loader.loadClass("com.android.server.SystemServer"), "startOtherServices", null,
-                        unused -> ServerHooks.install(loader));
+                        unused -> {
+                            ServerHooks.install(loader);
+                            CustomHooks.install(loader);
+                        });
                 return false;
             }, null);
         } catch (Throwable t) {
