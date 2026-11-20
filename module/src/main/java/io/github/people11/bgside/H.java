@@ -71,7 +71,7 @@ final class H {
         void run(StackFrameAccessor a, Invoker original) throws Throwable;
     }
 
-    /** Like {@link #hook} but the callback controls when the original runs. If it fails before that, the original still runs. */
+    /** Like {@link #hook}, but the callback decides when the original runs (still runs if the callback fails first). */
     static void around(Class<?> c, String name, Around around) {
         Method m = method(c, name);
         Hooks.hook(m, EntryPointType.DIRECT, (original, frame) -> {

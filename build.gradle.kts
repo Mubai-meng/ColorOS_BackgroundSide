@@ -4,8 +4,7 @@ plugins {
 }
 
 subprojects {
-    // PanamaPort AARs declare minCompileSdk=37, but ZygoteLoader's plugin targets AGP 8.x which
-    // cannot resolve that platform; the check is compile-time only, so it is safe to skip.
+    // PanamaPort AARs declare minCompileSdk=37, unresolvable on AGP 8.x; the check is compile-time only.
     tasks.configureEach {
         if (name.matches(Regex("check.*AarMetadata"))) enabled = false
     }

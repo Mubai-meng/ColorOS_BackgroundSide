@@ -22,44 +22,24 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * system_server side.
- * <ol>
- * <li>Every minimize to the edge bubble hangs the task: a private Mirage keep-alive display is prepared for it, one
- *     per task so hung apps do not occlude each other.</li>
- * <li>The minimize animation does not pause the task, and where the stock minimize would push it behind home
- *     (invisible, stopped) it is moved to its display instead, in one deferred-visibility section, so it never stops.
- *     While hung the display does not sleep, looks like the real screen to the app, and the app runs at
- *     {@link #HANG_FPS}.</li>
- * <li>Leaving: tapping the bubble runs the stock restore (which already handles tasks on VIRTUAL displays); a launch
- *     from home / recents first moves the task back to display 0 so the stock launch animation plays; dismissing the
- *     bubble or removing the task just ends the hang.</li>
- * </ol>
- */
+/** system_server side: every minimize to the bubble moves the task to its own Mirage keep-alive display. */
 final class ServerHooks {
     private static final int INVALID_DISPLAY = -1;
-    /** Frame rate cap for hung apps: keeps running, saves power. */
     private static final float HANG_FPS = 10f;
-    /** A minimize that never completes (e.g. interrupted) is dropped after this. */
     private static final long PENDING_TIMEOUT_MS = 10_000;
-    /** Lets a pending move back to display 0 run before the display goes away. */
     private static final long RELEASE_DELAY_MS = 1_000;
-    /** SurfaceFlinger debug transaction: per-uid frame rate override (highest priority). */
     private static final int SF_SET_FRAME_RATE_OVERRIDE = 1039;
 
     private static final class Hang {
         volatile String pkg;
         volatile int uid = -1;
         volatile int display = INVALID_DISPLAY;
-        /** Display exists in Mirage and WM. */
         volatile boolean ready;
-        /** Task moved to our display. */
         volatile boolean moved;
     }
 
-    /** taskId -> state, from the minimize until unhang. */
     private static final Map<Integer, Hang> hung = new ConcurrentHashMap<>();
-    /** Tasks inside the stock bubble restore. */
+    /** Inside the stock bubble restore. */
     private static final Set<Integer> restoring = ConcurrentHashMap.newKeySet();
 
     private static Handler handler;
@@ -83,9 +63,7 @@ final class ServerHooks {
             Class<?> keepAlive = cl.loadClass("com.android.server.wm.OplusMirageKeepAlivePolicy");
             Class<?> displayContent = cl.loadClass("com.android.server.wm.DisplayContent");
 
-            // --- Entering ---
-
-            // Every minimize (menu, caption, gesture, auto-collapse when another window opens) starts here.
+            // Every minimize path (menu, caption, gesture, auto-collapse) starts here.
             H.hook(toFloat, "handleEvent", a -> {
                 int id = H.get(H.get(a.getReference(0), "mTask"), "mTaskId");
                 Hang h = new Hang();
@@ -98,11 +76,10 @@ final class ServerHooks {
                 return false;
             }, null);
 
-            // The minimize animation start pauses the task ("pause in recents anim"); not for a task being hung.
+            // Don't pause during the minimize animation.
             H.hook(tfExt, "shouldSkipPauseInRecentsAnim", a -> {
                 if (hung.isEmpty()) return false;
                 Object tf = H.get(a.getReference(0), "mTaskFragment");
-                // shortcut: only handles leaf fragments that are Tasks (minimized flexible tasks are).
                 Hang h = tf != null && tf.getClass().getSimpleName().equals("Task")
                         ? hung.get((int) H.get(tf, "mTaskId")) : null;
                 if (h == null || h.moved) return false;
@@ -110,9 +87,8 @@ final class ServerHooks {
                 return true;
             }, null);
 
-            // The minimize ends by pushing the task behind home. Let that stock exit run (the bubble and its restore
-            // rely on the state it leaves), but move the task to our display in the same deferred-visibility section,
-            // so the one visibility pass at the end sees it visible on its own display.
+            // The stock exit hides the task behind home; move it to our display before visibility is recomputed.
+            // Plain WM move: Mirage's would reset the flexible-window state (size, hidden caption).
             H.around(ftc, "exitFlexibleTask", (a, original) -> {
                 Object task = a.getReference(1);
                 int id = H.get(task, "mTaskId");
@@ -122,7 +98,7 @@ final class ServerHooks {
                     return;
                 }
                 if (!h.ready) {
-                    // Only without a minimize animation (the display takes ~30 ms, the animation ~800 ms): plain minimize.
+                    // Minimize without animation: the display (~30 ms) isn't ready yet.
                     unhang(id, "display not ready in time");
                     original.call();
                     return;
@@ -134,13 +110,12 @@ final class ServerHooks {
                 setFps(h.uid, HANG_FPS);
                 withDeferredVisibility(() -> {
                     original.call();
-                    moveSync(id, h.display);
+                    Object root = rootWindowContainer();
+                    H.method(root.getClass(), "moveRootTaskToDisplay", 3).invoke(root, id, h.display, false);
                 });
             });
 
-            // --- While hung ---
-
-            // KeepAlive displays normally sleep with the main screen; ours must not, so apps keep running.
+            // Keep running with the screen off.
             H.hook(keepAlive, "shouldSleep", a -> {
                 Object info = H.get(a.getReference(0), "mDisplayInfo");
                 if (!isOurDisplay(H.get(info, "displayId"))) return false;
@@ -148,8 +123,7 @@ final class ServerHooks {
                 return true;
             }, null);
 
-            // Make our displays look like the real screen: a touch / color-mode difference is a config change some
-            // apps (Chrome) answer by recreating the activity, which stops their media.
+            // Match the real screen's touch / color mode: Chrome recreates (and stops media) on that config change.
             H.hook(displayContent, "computeScreenConfiguration", 1, null, a -> {
                 if (!isOurDisplay(H.get(a.getReference(0), "mDisplayId"))) return;
                 Configuration config = a.getReference(1);
@@ -158,11 +132,7 @@ final class ServerHooks {
                 config.colorMode = main.colorMode;
             });
 
-            // --- Leaving ---
-
-            // Bubble tap: the stock restore itself moves a task on a VIRTUAL display back to display 0
-            // (moveRootTaskToDisplay, surface hidden until the open animation), then starts it via
-            // startActivityFromRecents, which must not be taken for a launch from recents (see below).
+            // Bubble tap: the stock restore moves tasks off VIRTUAL displays itself, then uses startActivityFromRecents.
             H.hook(fhc, "startActivityByFloatInfo", a -> {
                 restoring.add(H.get(a.getReference(1), "taskId"));
                 return false;
@@ -172,8 +142,7 @@ final class ServerHooks {
                 unhang(id, "restored from bubble");
             });
 
-            // The open animation covers the task with its snapshot (taken at minimize: stale, low-res) until well after
-            // the animation ends. A hung task kept running and draws a current frame at once, so skip the snapshot.
+            // The restore would cover the live app with its stale minimize-time snapshot until ~1 s after opening.
             H.hook(infoManager, "isSkipRecordSnapshot", a -> {
                 if (hung.isEmpty()) return false;
                 Hang h = hung.get((int) H.get(H.get(a.getReference(0), "mFlexibleTask"), "mTaskId"));
@@ -182,9 +151,7 @@ final class ServerHooks {
                 return true;
             }, null);
 
-            // The open animation's first frame puts the task, scaled to 0.1 but uncropped, under a bubble-sized mask;
-            // only the spring frames after it crop the leash. A stock task has not redrawn yet, a hung one has, so its
-            // bottom shows below the bubble for a frame. Crop that first frame to nothing; the springs override it.
+            // The open animation's first frame leaves the leash uncropped, so the live app peeks out below the bubble.
             H.hook(openAnimSpec, "defaultCallAnimationStart", a -> {
                 Object spec = a.getReference(0);
                 if (!restoring.contains((int) H.get(H.get(spec, "mAnimTask"), "mTaskId"))) return false;
@@ -193,16 +160,14 @@ final class ServerHooks {
                 return false;
             }, null);
 
-            // Launch from home / recents: move the task back to display 0 before the start (and its transition)
-            // begins, so it is an ordinary background task and the stock launch animation plays. Otherwise the
-            // KeepAlive policy moves it during the start, leaving the transition with a display change.
+            // Launch from home / recents: move back first, else the transition sees a display change and won't animate.
             H.hook(starter, "execute", 0, a -> {
-                if (hung.isEmpty()) return false; // hot path: skip the reflection
+                if (hung.isEmpty()) return false;
                 Intent intent = H.get(H.get(a.getReference(0), "mRequest"), "intent");
                 if (intent == null || intent.getComponent() == null || !Intent.ACTION_MAIN.equals(intent.getAction())
                         || !intent.hasCategory(Intent.CATEGORY_LAUNCHER)) return false;
                 String pkg = intent.getComponent().getPackageName();
-                // shortcut: matches by package only (no user id); launching a clone app also ends the hang.
+                // shortcut: matches by package only, so a clone app's launch also ends the hang.
                 for (var e : hung.entrySet()) {
                     if (e.getValue().moved && pkg.equals(e.getValue().pkg)) leaveHang(e.getKey(), "launched from home");
                 }
@@ -216,13 +181,13 @@ final class ServerHooks {
                 return false;
             }, null);
 
-            // Bubble dismissed: park the task back on display 0 (if nothing else moved it already).
+            // Bubble dismissed.
             H.hook(fhc, "dispatchViewRemoved", null, a -> {
                 int id = H.get(a.getReference(2), "taskId");
                 Hang h = hung.get(id);
                 if (!unhang(id, "bubble removed")) return;
                 handler.post(() -> {
-                    if (isTaskOnDisplay(id, h.display)) moveSync(id, Display.DEFAULT_DISPLAY);
+                    if (isTaskOnDisplay(id, h.display)) moveBack(id);
                 });
             });
 
@@ -237,7 +202,7 @@ final class ServerHooks {
         }
     }
 
-    /** Runs on {@link #handler}: create the task's display and wait until Mirage and WM know it. */
+    /** On {@link #handler}: create the display and wait until Mirage and WM know it. */
     private static void prepare(int taskId, Hang h, int attempt) {
         if (hung.get(taskId) != h) return; // cancelled meanwhile
         try {
@@ -256,13 +221,12 @@ final class ServerHooks {
         }
     }
 
-    /** Move a hung task back to display 0 (hidden, behind home: like a stock minimized task) and stop hanging. */
     private static void leaveHang(int taskId, String why) {
-        moveSync(taskId, Display.DEFAULT_DISPLAY);
+        moveBack(taskId);
         unhang(taskId, why);
     }
 
-    /** @return true if the task was hung. Restores its frame rate and releases its display. */
+    /** @return true if the task was hung. */
     private static boolean unhang(int taskId, String why) {
         Hang h = hung.remove(taskId);
         if (h == null) return false;
@@ -294,10 +258,7 @@ final class ServerHooks {
         }
     }
 
-    /**
-     * Via SurfaceFlinger's per-uid frame rate override backdoor: unlike the GameManager override it has the highest
-     * priority, so it also applies when a refresh rate is forced (transaction 1035). fps 0 = clear.
-     */
+    /** SurfaceFlinger's per-uid override backdoor; unlike GameManager's it survives a forced rate (1035). 0 = clear. */
     private static void setFps(int uid, float fps) {
         if (uid < 0) return;
         handler.post(() -> {
@@ -327,12 +288,12 @@ final class ServerHooks {
         H.call(o, "setDisplayWidth", Math.min(dm.widthPixels, dm.heightPixels));
         H.call(o, "setDisplayHeight", Math.max(dm.widthPixels, dm.heightPixels));
         Bundle b = H.call(o, "toBundle");
-        // Own display group: the display keeps its power state when the main screen turns off.
+        // Own display group: stays on when the main screen turns off.
         b.putBoolean("mirage:ownDisplayGroup", true);
         return mirage("createVirtualDisplayDevice", b);
     }
 
-    /** WM does not create a DisplayContent for Mirage keep-alive displays by itself; moving a task needs one. */
+    /** WM doesn't create a DisplayContent for keep-alive displays by itself. */
     private static boolean ensureDisplayContent(int d) throws ReflectiveOperationException {
         Object wms = H.get(mirageService(), "mWms");
         synchronized ((Object) H.get(wms, "mGlobalLock")) {
@@ -340,11 +301,7 @@ final class ServerHooks {
         }
     }
 
-    /**
-     * Run {@code body} under the WM lock with root visibility updates and resumes deferred, then do one visibility +
-     * resume pass. Reparenting removes the task from its old display first; a pass in between would make it
-     * invisible (stopped) for a moment. Safe with the WM lock already held (monitors are re-entrant).
-     */
+    /** Runs {@code body} with visibility updates deferred, so a reparented task is never briefly invisible (stopped). */
     private static void withDeferredVisibility(H.Invoker body) throws Throwable {
         Object atms = H.get(mirageService(), "mAtms");
         Object supervisor = H.get(atms, "mTaskSupervisor");
@@ -357,7 +314,7 @@ final class ServerHooks {
             } finally {
                 H.call(supervisor, "setDeferRootVisibilityUpdate", false);
                 H.call(supervisor, "endDeferResume");
-                // New displays sit above display 0 and take the global focus: keys/IME must stay on the real screen.
+                // Keep focus (keys, IME) on the real screen.
                 H.method(root.getClass(), "positionChildAt", 3)
                         .invoke(root, Integer.MAX_VALUE, H.call(root, "getDefaultDisplay"), true);
                 H.method(root.getClass(), "updateFocusedWindowLocked", 2).invoke(root, 0, true);
@@ -367,14 +324,30 @@ final class ServerHooks {
         }
     }
 
-    /**
-     * Mirage's own move runnable, run on the calling thread (onTop=false: the hidden display must not take focus).
-     * It resets flexible-window state for the move and, when moving to display 0, hides the task first.
-     */
+    /** Back to display 0 as a plain hidden full-screen background task (what Mirage's move-in used to leave). */
+    private static void moveBack(int taskId) {
+        try {
+            Object root = rootWindowContainer();
+            synchronized ((Object) H.get(H.get(mirageService(), "mAtms"), "mGlobalLock")) {
+                Object task = H.method(root.getClass(), "anyTaskForId", 1).invoke(root, taskId);
+                if (task != null && (boolean) loader.loadClass("com.android.server.wm.FlexibleWindowUtils")
+                        .getMethod("isFlexibleTaskAndHasCaption", task.getClass()).invoke(null, task)) {
+                    Object fwms = H.callStatic(
+                            loader.loadClass("com.android.server.wm.FlexibleWindowManagerService"), "getInstance", (Object) null);
+                    H.call(H.call(fwms, "getFlexibleTaskController"), "resetFlexibleTaskToFullScreen", task);
+                }
+            }
+        } catch (ReflectiveOperationException e) {
+            Log.e(TAG, "flexible reset for task " + taskId + " failed", e);
+        }
+        moveSync(taskId, Display.DEFAULT_DISPLAY);
+    }
+
+    /** Mirage's move, run synchronously; moving to display 0 it hides the task first. */
     private static void moveSync(int taskId, int displayId) {
         try {
             Object svc = mirageService();
-            // shortcut: R8-numbered anonymous class on CPH2723 16.0.2; a ROM update may rename it (async fallback).
+            // shortcut: R8-numbered class on CPH2723 16.0.2; if a ROM update renames it, the async fallback is used.
             Constructor<?> c = loader.loadClass("com.android.server.wm.OplusMirageWindowManagerService$8")
                     .getDeclaredConstructor(svc.getClass(), int.class, int.class, boolean.class);
             c.setAccessible(true);
@@ -393,7 +366,7 @@ final class ServerHooks {
         return H.callStatic(loader.loadClass("com.android.server.wm.OplusMirageWindowManagerService"), "getInstance");
     }
 
-    /** Calls the public OplusMirageWindowManager client API (binder to ourselves, runs as system uid). */
+    /** Public OplusMirageWindowManager client API. */
     private static <T> T mirage(String method, Object... args) {
         try {
             Object m = H.callStatic(loader.loadClass("com.oplus.miragewindow.OplusMirageWindowManager"), "getInstance");

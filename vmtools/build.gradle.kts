@@ -1,6 +1,5 @@
-// Builds aerath-stuff/AndroidVMTools from the git submodule (its own build needs AGP 9 / SDK 37
-// and is not published on jitpack). CI updates the submodule to upstream HEAD on every build,
-// so dependency versions are read from upstream's own version catalog to stay in sync.
+// Builds AndroidVMTools from the submodule (upstream needs AGP 9 / SDK 37, not on jitpack); versions come
+// from its catalog so CI can track upstream HEAD.
 plugins {
     alias(libs.plugins.android.library)
 }

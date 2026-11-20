@@ -19,7 +19,7 @@ Zygisk 模块（基于 [AndroidVMTools](https://github.com/aerath-stuff/AndroidV
 |---|---|
 | `ExitFlexibleTaskToFloatStrategy.handleEvent` | 任何最小化的起点：为该任务创建虚拟屏 |
 | `TaskFragmentExtImpl.shouldSkipPauseInRecentsAnim` | 最小化动画期间不暂停 |
-| `FlexibleTaskController.exitFlexibleTask` | 原生最小化收尾时，在同一个推迟可见性的区间里把任务移到虚拟屏，焦点留在主屏 |
+| `FlexibleTaskController.exitFlexibleTask` | 原生最小化收尾时，在同一个推迟可见性的区间里把任务移到虚拟屏（直接用 WM 的移屏，保留小窗状态：尺寸不变、边框保持隐藏），焦点留在主屏 |
 | `OplusMirageKeepAlivePolicy.shouldSleep` | 我们的虚拟屏不随主屏休眠 |
 | `DisplayContent.computeScreenConfiguration` | 虚拟屏的触屏/色彩模式配置与主屏一致，避免 Chrome 等重建 Activity |
 | `FloatHandleController.startActivityByFloatInfo` | 点气泡：原生恢复自带“虚拟屏任务移回主屏”，之后解除挂机 |
