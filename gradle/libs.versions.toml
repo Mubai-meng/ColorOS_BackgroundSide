@@ -1,0 +1,12 @@
+[versions]
+agp = "8.13.0"
+zygisk = "2a2160fea2"
+r8-annotations = "v1.0.1"
+
+[libraries]
+r8-annotations = { module = "io.github.vova7878:R8Annotations", version.ref = "r8-annotations" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+zygisk = { id = "com.github.aerath-stuff.ZygoteLoader", version.ref = "zygisk" }

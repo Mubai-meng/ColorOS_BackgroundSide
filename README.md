@@ -1,0 +1,35 @@
+# ColorOS 小窗后台挂机
+
+Zygisk 模块（基于 [AndroidVMTools](https://github.com/aerath-stuff/AndroidVMTools)），在 ColorOS 16 上恢复旧版 realme 的
+“小窗缩成边缘气泡后后台挂机”：应用继续以前台、亮屏状态运行。
+
+测试环境：CPH2723 / ColorOS 16.0.2 / Android 16。系统里该功能的入口和逻辑已删除，但底层的 Mirage 虚拟屏
+（`OplusMirageWindowManager`，castMode 7 保活屏，GameBounce 也用它）还在，本模块直接复用。
+
+## 效果
+
+- 小窗最小化成边缘气泡（菜单、标题栏、手势、打开别的小窗时自动收起，任何方式都算）就是挂机：
+  应用移到它自己的保活虚拟屏上继续运行（RESUMED、可见，不暂停也不停止）。
+- 挂机期间：降到 10 fps 省电（不静音，系统可单独调应用音量）；主屏灭屏后虚拟屏不休眠；没有超时退出。
+- 退出挂机：点击气泡恢复成小窗；从桌面或最近任务打开该应用；关掉气泡；划掉任务。
+
+## 实现
+
+| Hook（均在 system_server） | 作用 |
+|---|---|
+| `ExitFlexibleTaskToFloatStrategy.handleEvent` | 任何最小化的起点：为该任务创建虚拟屏 |
+| `TaskFragmentExtImpl.shouldSkipPauseInRecentsAnim` | 最小化动画期间不暂停 |
+| `FlexibleTaskController.exitFlexibleTask` | 原生最小化收尾时，在同一个推迟可见性的区间里把任务移到虚拟屏，焦点留在主屏 |
+| `OplusMirageKeepAlivePolicy.shouldSleep` | 我们的虚拟屏不随主屏休眠 |
+| `DisplayContent.computeScreenConfiguration` | 虚拟屏的触屏/色彩模式配置与主屏一致，避免 Chrome 等重建 Activity |
+| `FloatHandleController.startActivityByFloatInfo` | 点气泡：原生恢复自带“虚拟屏任务移回主屏”，之后解除挂机 |
+| `OplusFlexibleInfoManager.isSkipRecordSnapshot` | 恢复动画不盖最小化时的旧快照（否则画面冻结 1~2 秒） |
+| `ActivityStarter.execute` / `ActivityTaskSupervisor.startActivityFromRecents` | 从桌面/最近任务打开：启动前先移回主屏，原生启动动画才正常 |
+| `FloatHandleController.dispatchViewRemoved` / `TaskChangeNotificationController.notifyTaskRemoved` | 气泡被关掉、任务被移除：解除挂机 |
+
+降帧用 SurfaceFlinger 的按 uid 帧率覆盖后门（transaction 1039）。GameManager 的覆盖会被 1035 强制刷新率忽略，1039 不会。
+
+## 构建
+
+GitHub Actions 云端编译（`.github/workflows/build.yml`），每次都会把 `external/AndroidVMTools` 子模块更新到上游最新版本，
+产物是 `module/build/outputs/magisk/` 下的 Magisk 模块 zip。

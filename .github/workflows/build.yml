@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Upstream AndroidVMTools frequently adapts to new Android releases: always build against its HEAD.
+      - name: Update AndroidVMTools to latest
+        run: |
+          git submodule update --remote --recursive external/AndroidVMTools
+          echo "AndroidVMTools @ $(git -C external/AndroidVMTools log -1 --format='%h %s')" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Build Magisk module
+        run: gradle --no-daemon :module:assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ColorOS_BackgroundSide
+          path: module/build/outputs/magisk/
+
+      - name: Prune Old Actions
+        if: always()
+        uses: yanovian/prune-old-actions@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          days-ago: 0
+          keep-latest: 5
