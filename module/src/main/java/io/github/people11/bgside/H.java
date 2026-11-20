@@ -37,7 +37,7 @@ final class H {
     /** As {@link #hook(Class, String, Before, After)}, for the overload with {@code argc} parameters. */
     static void hook(Class<?> c, String name, int argc, Before before, After after) {
         Method m = method(c, name, argc);
-        Hooks.hook(m, EntryPointType.DIRECT, (original, frame) -> {
+        Hooks.hook(m, EntryPointType.CURRENT, (original, frame) -> {
             var a = frame.accessor();
             boolean skip = false;
             if (before != null) {
@@ -74,7 +74,7 @@ final class H {
     /** Like {@link #hook}, but the callback decides when the original runs (still runs if the callback fails first). */
     static void around(Class<?> c, String name, Around around) {
         Method m = method(c, name);
-        Hooks.hook(m, EntryPointType.DIRECT, (original, frame) -> {
+        Hooks.hook(m, EntryPointType.CURRENT, (original, frame) -> {
             boolean[] called = {false};
             Invoker inv = () -> {
                 called[0] = true;
