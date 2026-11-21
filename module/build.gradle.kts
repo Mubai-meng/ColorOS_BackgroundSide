@@ -12,8 +12,8 @@ android {
     defaultConfig {
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "v0.1.0"
+        versionCode = 7
+        versionName = "v0.1.6"
         // The Magisk zip takes its native libs (zygisk loader, PanamaPort) from the APK's lib/<abi>/.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -42,7 +42,7 @@ zygisk {
 
     id = "coloros_background_side"
     name = "ColorOS 小窗后台挂机"
-    author = "People-11"
+    author = "Mubai-meng"
     description = "小窗最小化为边缘气泡后，应用移至保活虚拟屏继续运行（后台挂机）"
     entrypoint = "io.github.people11.bgside.Main"
     archiveName = "ColorOS_BackgroundSide"

@@ -12,6 +12,9 @@ import com.v7878.r8.annotations.DoNotShrinkType;
 @DoNotObfuscateType
 @DoNotShrinkType
 public final class Main {
+    /** Guards against a second findStaticMain pass double-installing the hooks. */
+    private static volatile boolean armed;
+
     /** Injected into system_server only. */
     @SuppressWarnings({"unused", "ConfusingMainMethod"})
     @DoNotShrink
@@ -21,6 +24,8 @@ public final class Main {
             // The system server class loader (services.jar, oplus-services.jar) is handed to findStaticMain.
             H.hook(Class.forName("com.android.internal.os.RuntimeInit"), "findStaticMain", a -> {
                 if (!"com.android.server.SystemServer".equals(a.getReference(0))) return false;
+                if (armed) return false;
+                armed = true;
                 ClassLoader loader = a.getReference(2);
                 // After all services exist, so oplus classes are not initialized early.
                 H.hook(loader.loadClass("com.android.server.SystemServer"), "startOtherServices", null,
