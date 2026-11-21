@@ -42,7 +42,7 @@ zygisk {
 
     id = "coloros_background_side"
     name = "ColorOS 小窗后台挂机"
-    author = "Mubai-meng"
+    author = "People-11"
     description = "小窗最小化为边缘气泡后，应用移至保活虚拟屏继续运行（后台挂机）"
     entrypoint = "io.github.people11.bgside.Main"
     archiveName = "ColorOS_BackgroundSide"
