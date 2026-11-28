@@ -666,14 +666,24 @@ final class ServerHooks {
             synchronized (globalLock()) {
                 Object task = H.method(root.getClass(), "anyTaskForId", 1).invoke(root, taskId);
                 // 4 overloads (ActivityOptions/WindowContainer/Task/TaskInfo): bind by the task's own type.
-                if (task != null && (boolean) utils.getMethod("isFlexibleTaskAndHasCaption", task.getClass()).invoke(null, task)) {
-                    Object fwmsService = H.callStatic(fwms, "getInstance", (Object) null);
-                    H.call(H.call(fwmsService, "getFlexibleTaskController"), "resetFlexibleTaskToFullScreen", task);
+                boolean flexible = task != null
+                        && (boolean) utils.getMethod("isFlexibleTaskAndHasCaption", task.getClass()).invoke(null, task);
+                // The reset and the hide are independent, so each gets its own try: a failure in the first
+                // must not skip the second. They shared one block once, and that is exactly how a single
+                // ambiguous-overload throw left the task in its mini bounds (so it needed a second tap) and
+                // still visible (so Mirage's makeInvisible raced resumeTopActivity).
+                if (flexible) {
+                    try {
+                        Object fwmsService = H.callStatic(fwms, "getInstance", (Object) null);
+                        H.call(H.call(fwmsService, "getFlexibleTaskController"), "resetFlexibleTaskToFullScreen", task);
+                    } catch (Throwable t) {
+                        Log.e(TAG, "flexible reset for task " + taskId + " failed", t);
+                    }
                 }
                 if (task != null && launching) hideActivities(task);
             }
         } catch (Throwable t) {
-            Log.e(TAG, "flexible reset / hide for task " + taskId + " failed", t);
+            Log.e(TAG, "flexible hide for task " + taskId + " failed", t);
         }
         moveSync(taskId, Display.DEFAULT_DISPLAY);
     }

@@ -207,14 +207,24 @@ final class H {
         return (T) field(o.getClass(), name).get(o);
     }
 
+    /**
+     * Invoke {@code name} on {@code o}, resolving the overload by the number of arguments passed.
+     *
+     * <p>This used to pass -1 ("any arity") to {@link #method}, which made {@code findMethod} throw
+     * {@code ambiguous} as soon as a class had two overloads of the same name. The first such call
+     * ({@code FlexibleTaskController.resetFlexibleTaskToFullScreen} has both {@code (Task)} and
+     * {@code (Task,int)}) aborted its whole caller's try block, silently skipping everything queued
+     * after it. Never widen this back to -1.
+     */
     @SuppressWarnings("unchecked")
     static <T> T call(Object o, String name, Object... args) throws ReflectiveOperationException {
-        return (T) method(o.getClass(), name).invoke(o, args);
+        return (T) method(o.getClass(), name, args.length).invoke(o, args);
     }
 
+    /** As {@link #call(Object, String, Object...)}, for a static method. */
     @SuppressWarnings("unchecked")
     static <T> T callStatic(Class<?> c, String name, Object... args) throws ReflectiveOperationException {
-        return (T) method(c, name).invoke(null, args);
+        return (T) method(c, name, args.length).invoke(null, args);
     }
 
     private H() {

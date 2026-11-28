@@ -4,7 +4,7 @@ Zygisk 模块（基于 [AndroidVMTools](https://github.com/aerath-stuff/AndroidV
 在 ColorOS 上恢复旧版 realme 的“小窗缩成边缘气泡后后台挂机”：应用保持前台、亮屏状态继续运行。
 
 本分支在原项目基础上完成了 **ColorOS 17 / Android 17 适配**与性能、续航、稳定性优化，
-当前版本 `v0.2.1`（versionCode 9），模块作者为原作者 `People-11` 与本分支维护者 `Mubai-meng`。
+当前版本 `v0.2.2`（versionCode 10），模块作者为原作者 `People-11` 与本分支维护者 `Mubai-meng`。
 
 ## 效果
 
