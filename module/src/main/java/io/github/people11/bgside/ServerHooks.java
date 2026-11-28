@@ -4,9 +4,11 @@ import static io.github.people11.bgside.H.TAG;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
+import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -60,6 +62,13 @@ final class ServerHooks {
     /** uid -> number of tasks pinned at HANG_FPS. */
     private static final Map<Integer, Integer> fpsPins = new ConcurrentHashMap<>();
     /**
+     * uid of the top resumed activity when it is outside our displays, or -1. The override is per uid, so
+     * it also throttles the app's other activities (Chrome's Custom Tab inside another app): it is lifted
+     * while one of them is in front. Guarded by {@link #fpsLock}, together with {@link #fpsPins}.
+     */
+    private static int frontUid = -1;
+    private static final Object fpsLock = new Object();
+    /**
      * Resolved once, outside the WM lock: {@code forAllWindows} has two overloads with the same arity
      * (Consumer / ToBooleanFunction) so {@link H#method} would refuse it as ambiguous.
      */
@@ -69,6 +78,9 @@ final class ServerHooks {
     private static volatile Class<?> flexibleUtilsClass;
     private static volatile Class<?> fwmsClass;
     private static volatile Class<?> mirageClientClass;
+    /** {@code forAllActivities} has Consumer / Predicate overloads: bind by type, once, outside the lock. */
+    private static volatile Method forAllActivitiesMethod;
+    private static volatile Method setVisibilityMethod;
 
     private interface Step {
         void run() throws Throwable;
@@ -101,6 +113,7 @@ final class ServerHooks {
             Class<?> infoManager = cl.loadClass("com.android.server.wm.OplusFlexibleInfoManager");
             Class<?> openAnimSpec = cl.loadClass("com.android.server.wm.FlexibleFloatHandleAnimationSpec");
             Class<?> starter = cl.loadClass("com.android.server.wm.ActivityStarter");
+            Class<?> atmsClass = cl.loadClass("com.android.server.wm.ActivityTaskManagerService");
             Class<?> supervisor = cl.loadClass("com.android.server.wm.ActivityTaskSupervisor");
             Class<?> tcn = cl.loadClass("com.android.server.wm.TaskChangeNotificationController");
             Class<?> keepAlive = cl.loadClass("com.android.server.wm.OplusMirageKeepAlivePolicy");
@@ -208,7 +221,10 @@ final class ServerHooks {
                 return false;
             }, a -> {
                 int id = H.get(a.getReference(1), "taskId");
-                restoring.remove(id);
+                // This callback runs before the open animation starts, so the id has to stay in `restoring`
+                // for the whole animation: the first-frame crop below keys on it. `unhang` no longer clears
+                // it; a new minimize and the pending timeout are the fallbacks.
+                handler.postDelayed(() -> restoring.remove(id), RESTORE_RELEASE_DELAY_MS);
                 unhang(id, "restored from bubble", RESTORE_RELEASE_DELAY_MS);
             }));
 
@@ -239,8 +255,10 @@ final class ServerHooks {
                         || !intent.hasCategory(Intent.CATEGORY_LAUNCHER)) return false;
                 String pkg = intent.getComponent().getPackageName();
                 // shortcut: matches by package only, so a clone app's launch also ends the hang.
+                // isHungHere, not just `moved`: a task the system already pulled back must not be moved
+                // (and hidden) a second time.
                 for (var e : hung.entrySet()) {
-                    if (e.getValue().moved && pkg.equals(e.getValue().pkg)) leaveHang(e.getKey(), "launched from home");
+                    if (pkg.equals(e.getValue().pkg) && isHungHere(e.getKey())) leaveHang(e.getKey(), "launched from home");
                 }
                 return false;
             }, null));
@@ -248,8 +266,7 @@ final class ServerHooks {
             step("launch from recents", () -> H.hook(supervisor, "startActivityFromRecents", a -> {
                 if (hung.isEmpty()) return false;
                 int id = a.getInt(3);
-                Hang h = hung.get(id);
-                if (h != null && h.moved && !restoring.contains(id)) leaveHang(id, "launched from recents");
+                if (!restoring.contains(id) && isHungHere(id)) leaveHang(id, "launched from recents");
                 return false;
             }, null));
 
@@ -261,8 +278,23 @@ final class ServerHooks {
                 Hang h = hung.get(id);
                 if (!unhang(id, "bubble removed")) return false;
                 handler.post(() -> {
-                    if (isTaskOnDisplay(id, h.display)) moveBack(id);
+                    // Not a launch: the bubble was dismissed, so the task goes back hidden.
+                    if (isTaskOnDisplay(id, h.display)) moveBack(id, false);
                 });
+                return false;
+            }, null));
+
+            // The frame rate override is per uid, so it also throttles the app's activities elsewhere
+            // (Chrome's Custom Tab inside another app). Lift it while one of them is the top resumed activity.
+            step("lift cap when app in front elsewhere", () -> H.hook(atmsClass, "setLastResumedActivityUncheckLocked", a -> {
+                if (hung.isEmpty()) return false; // no pins, nothing to lift
+                Object r = a.getReference(1);
+                if (r == null) return false;
+                Object task = H.get(r, "task");
+                ActivityInfo info = H.get(r, "info");
+                if (task == null || info == null || info.applicationInfo == null) return false;
+                setFront(isOurDisplay((int) (Integer) H.call(task, "getDisplayId"))
+                        ? -1 : info.applicationInfo.uid);
                 return false;
             }, null));
 
@@ -305,8 +337,15 @@ final class ServerHooks {
         }
     }
 
+    /** For a start from home / recents, which brings the task to front right after. */
     private static void leaveHang(int taskId, String why) {
-        moveBack(taskId);
+        // The hook runs as the launcher; surface placement inside the move checks the caller's WAKE_LOCK.
+        long ident = Binder.clearCallingIdentity();
+        try {
+            moveBack(taskId, true);
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
         unhang(taskId, why);
     }
 
@@ -319,7 +358,7 @@ final class ServerHooks {
     private static boolean unhang(int taskId, String why, long releaseDelayMs) {
         Hang h = hung.remove(taskId);
         if (h == null) return false;
-        restoring.remove(taskId);
+        // `restoring` is cleared by its own delayed task: the open animation's crop still needs it.
         Log.i(TAG, "unhang task " + taskId + ": " + why);
         releaseHang(h, releaseDelayMs);
         // ColorOS 17 reparents the task but not its windows: rebind once early and once after the animation.
@@ -476,13 +515,35 @@ final class ServerHooks {
     /** The override is per uid, so two hung tasks of the same app must not clobber each other. */
     private static void pinFps(int uid) {
         if (uid < 0) return;
-        if (fpsPins.merge(uid, 1, Integer::sum) == 1) sendFps(uid, HANG_FPS);
+        synchronized (fpsLock) {
+            if (uid == frontUid) frontUid = -1; // the task being minimized is no longer in front
+            if (fpsPins.merge(uid, 1, Integer::sum) == 1) sendFps(uid, HANG_FPS);
+        }
     }
 
     private static void unpinFps(int uid) {
         if (uid < 0) return;
-        Integer left = fpsPins.compute(uid, (k, v) -> v == null || v <= 1 ? null : v - 1);
-        if (left == null) sendFps(uid, 0f);
+        synchronized (fpsLock) {
+            Integer left = fpsPins.compute(uid, (k, v) -> v == null || v <= 1 ? null : v - 1);
+            if (left == null) sendFps(uid, 0f);
+        }
+    }
+
+    /** A different activity of a pinned uid came to front (or left): swap which side holds the override. */
+    private static void setFront(int uid) {
+        synchronized (fpsLock) {
+            int old = frontUid;
+            if (old == uid) return;
+            frontUid = uid;
+            if (fpsPins.containsKey(old)) sendFps(old, HANG_FPS);
+            if (fpsPins.containsKey(uid)) sendFps(uid, 0f);
+        }
+    }
+
+    /** Moved and still on its own display: the system may already have pulled the task back. */
+    private static boolean isHungHere(int taskId) {
+        Hang h = hung.get(taskId);
+        return h != null && h.moved && isTaskOnDisplay(taskId, h.display);
     }
 
     /** SurfaceFlinger's per-uid override backdoor; unlike GameManager's it survives a forced rate (1035). 0 = clear. */
@@ -566,8 +627,15 @@ final class ServerHooks {
         }
     }
 
-    /** Back to display 0 as a plain hidden full-screen background task (what Mirage's move-in used to leave). */
-    private static void moveBack(int taskId) {
+    /**
+     * Back to display 0 as a plain hidden full-screen background task (what Mirage's move-in used to leave).
+     *
+     * @param launching hide the activities first, so Mirage's {@code makeInvisible()} is a no-op: it queues a
+     *                  stop for the still-RESUMED activity that the start never takes back
+     *                  ({@code resumeTopActivity} returns early for a resumed top), so the next idle would
+     *                  stop it unless the launch transition holds it by then.
+     */
+    private static void moveBack(int taskId, boolean launching) {
         Class<?> utils;
         Class<?> fwms;
         try {
@@ -595,11 +663,42 @@ final class ServerHooks {
                     Object fwmsService = H.callStatic(fwms, "getInstance", (Object) null);
                     H.call(H.call(fwmsService, "getFlexibleTaskController"), "resetFlexibleTaskToFullScreen", task);
                 }
+                if (task != null && launching) hideActivities(task);
             }
         } catch (Throwable t) {
-            Log.e(TAG, "flexible reset for task " + taskId + " failed", t);
+            Log.e(TAG, "flexible reset / hide for task " + taskId + " failed", t);
         }
         moveSync(taskId, Display.DEFAULT_DISPLAY);
+    }
+
+    /**
+     * Mark the task's visible activities invisible before Mirage moves it. Mirage's move to display 0 runs
+     * {@code forAllActivities(makeInvisible + commitVisibility(false))}; doing it first turns that into a
+     * no-op instead of queuing a stop for an activity the launch is about to resume again.
+     */
+    private static void hideActivities(Object task) throws ReflectiveOperationException {
+        Method hide = setVisibilityMethod;
+        if (hide == null) {
+            hide = loader.loadClass("com.android.server.wm.ActivityRecord").getDeclaredMethod("setVisibility", boolean.class);
+            hide.setAccessible(true);
+            setVisibilityMethod = hide;
+        }
+        Method forAll = forAllActivitiesMethod;
+        if (forAll == null) {
+            // Consumer / Predicate overloads with the same arity: bind by parameter type.
+            forAll = loader.loadClass("com.android.server.wm.WindowContainer")
+                    .getDeclaredMethod("forAllActivities", Consumer.class);
+            forAll.setAccessible(true);
+            forAllActivitiesMethod = forAll;
+        }
+        final Method setVisibility = hide;
+        forAll.invoke(task, (Consumer<Object>) r -> {
+            try {
+                if (H.<Boolean>get(r, "mVisibleRequested")) setVisibility.invoke(r, false);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        });
     }
 
     /** Mirage's move, run synchronously; moving to display 0 it hides the task first. */

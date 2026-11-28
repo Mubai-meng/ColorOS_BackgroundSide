@@ -4,7 +4,7 @@ Zygisk 模块（基于 [AndroidVMTools](https://github.com/aerath-stuff/AndroidV
 在 ColorOS 上恢复旧版 realme 的“小窗缩成边缘气泡后后台挂机”：应用保持前台、亮屏状态继续运行。
 
 本分支在原项目基础上完成了 **ColorOS 17 / Android 17 适配**与性能、续航、稳定性优化，
-当前版本 `v0.1.6`（versionCode 7），模块作者沿用原作者 `People-11`。
+当前版本 `v0.2.0`（versionCode 8），模块作者沿用原作者 `People-11`。
 
 ## 效果
 
@@ -29,7 +29,7 @@ ColorOS 17 上系统已删除该功能的入口和状态逻辑，但底层 Mirag
 
 ## 实现
 
-模块通过 PanamaPort 在 `system_server` 内挂钩 12 处方法，每条 hook 独立容错（某条失败只记日志，不影响其余）。
+模块通过 PanamaPort 在 `system_server` 内挂钩 13 处方法，每条 hook 独立容错（某条失败只记日志，不影响其余）。
 相关反射成员、服务代理、类对象全部缓存，解析放在 WM 全局锁之外，热路径上无字符串分配。
 
 | Hook（`system_server`） | 作用 |
@@ -44,10 +44,13 @@ ColorOS 17 上系统已删除该功能的入口和状态逻辑，但底层 Mirag
 | `FlexibleFloatHandleAnimationSpec.defaultCallAnimationStart` | 恢复动画第一帧裁空动画层，避免挂机应用画面在气泡下方露出一帧 |
 | `ActivityStarter.execute` / `ActivityTaskSupervisor.startActivityFromRecents` | 从桌面/最近任务打开：启动前先移回主屏，原生启动动画才正常 |
 | `FloatHandleController.removeFloatHandleInner`（3 参） | 气泡被关掉：解除挂机。ColorOS 17 原 `dispatchViewRemoved` 已被内联删除，改 hook 此稳定入口 |
+| `ActivityTaskManagerService.setLastResumedActivityUncheckLocked` | 降帧是按 uid 生效的，会连带压低同一应用在别处的界面（如 Chrome 的 Custom Tab）；该应用在别的屏成为顶层 resumed 时临时抬掉帧率上限，回到虚拟屏再恢复 |
 | `TaskChangeNotificationController.notifyTaskRemoved` | 任务被移除：解除挂机 |
 
-解除挂机前会清理 Mirage 任务表中已经离开虚拟屏的任务，避免系统把正在主屏使用的小窗误判为“要搬回主屏”而隐藏/失焦
-（这会导致点全屏按钮没反应）。降帧使用 SurfaceFlinger 按 uid 帧率覆盖后门（transaction 1039，按 uid 引用计数，
+从桌面或最近任务启动时会先把任务移回主屏并隐藏其 activity（避免恢复首帧在气泡位置闪一下旧画面），
+并在移动前后清除 binder identity，让 WM 按调用者真实身份判定；已自行离开虚拟屏的任务不再重复搬回，
+否则会把正在主屏使用的小窗再隐藏一次。解除挂机前会清理 Mirage 任务表中已经离开虚拟屏的任务，
+避免系统把正在主屏使用的小窗误判为“要搬回主屏”而隐藏/失焦（这会导致点全屏按钮没反应）。降帧使用 SurfaceFlinger 按 uid 帧率覆盖后门（transaction 1039，按 uid 引用计数，
 恢复后成对释放）；GameManager 的覆盖会被 1035 强制刷新率忽略，1039 不会。
 
 ## 安装
@@ -89,6 +92,7 @@ adb logcat -d | grep -E "BgSide|should belong to display"
 | `frameRateOverrides=[{uid=... frameRateHz=10.0}]` | 降帧生效；恢复后应变回 `frameRateOverrides=[]` |
 | `SurfaceFlinger rejected frame rate override` | 帧率覆盖被拒，挂机会跑满帧耗电 |
 | `does not own the focus after restore` | 恢复期间焦点由动画接管，属正常诊断信息 |
+| `hook failed: lift cap when app in front elsewhere` | 帧率抬升 hook 不兼容；挂机本身仍工作，只是别处的同 uid 界面可能仍被限到 10 fps |
 
 恢复瞬间若看到 `InputDispatcher: ... should belong to display`，说明窗口输入归属没跟上，点击会被丢弃。
 
