@@ -4,7 +4,7 @@ Zygisk 模块（基于 [AndroidVMTools](https://github.com/aerath-stuff/AndroidV
 在 ColorOS 上恢复旧版 realme 的“小窗缩成边缘气泡后后台挂机”：应用保持前台、亮屏状态继续运行。
 
 本分支在原项目基础上完成了 **ColorOS 17 / Android 17 适配**与性能、续航、稳定性优化，
-当前版本 `v0.2.0`（versionCode 8），模块作者为原作者 `People-11` 与本分支维护者 `Mubai-meng`。
+当前版本 `v0.2.1`（versionCode 9），模块作者为原作者 `People-11` 与本分支维护者 `Mubai-meng`。
 
 ## 效果
 
@@ -91,7 +91,7 @@ adb logcat -d | grep -E "BgSide|should belong to display"
 | `display 10000: dropped N task(s) that already left` | 恢复时已清掉 Mirage 任务表残留，全屏按钮应可点 |
 | `frameRateOverrides=[{uid=... frameRateHz=10.0}]` | 降帧生效；恢复后应变回 `frameRateOverrides=[]` |
 | `SurfaceFlinger rejected frame rate override` | 帧率覆盖被拒，挂机会跑满帧耗电 |
-| `does not own the focus after restore` | 恢复期间焦点由动画接管，属正常诊断信息 |
+| `does not own the focus after restore` | 恢复期间焦点由动画接管，属正常诊断信息。`focused task` 现在能真正取到值，若恒为 `-1` 说明取焦点的路径又断了 |
 | `hook failed: lift cap when app in front elsewhere` | 帧率抬升 hook 不兼容；挂机本身仍工作，只是别处的同 uid 界面可能仍被限到 10 fps |
 
 恢复瞬间若看到 `InputDispatcher: ... should belong to display`，说明窗口输入归属没跟上，点击会被丢弃。

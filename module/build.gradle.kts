@@ -12,8 +12,8 @@ android {
     defaultConfig {
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "v0.2.0"
+        versionCode = 9
+        versionName = "v0.2.1"
         // The Magisk zip takes its native libs (zygisk loader, PanamaPort) from the APK's lib/<abi>/.
         ndk { abiFilters += "arm64-v8a" }
     }

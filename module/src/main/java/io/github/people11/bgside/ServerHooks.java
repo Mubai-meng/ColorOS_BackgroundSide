@@ -457,10 +457,17 @@ final class ServerHooks {
         }
     }
 
-    /** @return the task id owning the main display's focused window, or -1. */
+    /**
+     * @return the task id owning the main display's focused window, or -1.
+     *
+     * <p>{@code DisplayPolicy} itself has no {@code getFocusedWindow()}: on ColorOS 17 the only such method
+     * lives on the private inner {@code DisplayPolicyWrapper}, so reflecting through
+     * {@code getDisplayPolicy()} threw {@code NoSuchMethodException} on every call and this always returned
+     * -1. Read the {@code DisplayContent.mCurrentFocus} field instead, which is what that wrapper returns.
+     */
     private static int focusedTaskId(Object mainDisplay) {
         try {
-            Object window = H.call(H.call(mainDisplay, "getDisplayPolicy"), "getFocusedWindow");
+            Object window = H.get(mainDisplay, "mCurrentFocus");
             if (window == null) return -1;
             Object task = H.call(window, "getTask");
             return task == null ? -1 : (int) H.get(task, "mTaskId");
